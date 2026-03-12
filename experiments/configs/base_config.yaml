@@ -1,49 +1,36 @@
-# ─────────────────────────────────────────────────────────
-# FL Security Lab — Base Experiment Configuration
-# Modify attack/defense sections per experiment, not here
-# ─────────────────────────────────────────────────────────
-
-experiment:
-  name: "base_fedavg"
-  seed: 42                  # Fix random seed for reproducibility
-  log_dir: "experiments/logs"
-  results_dir: "experiments/results"
-
-federation:
-  num_clients: 10           # Total number of simulated clients
-  num_rounds: 20           # Communication rounds between server and clients
-  fraction_fit: 1.0       # Fraction of clients selected per round (1.0 = all)
-  fraction_evaluate: 1.0
-
+federated:
+  num_clients: 10
+  num_rounds: 20
+  fraction_fit: 1.0
+  fraction_eval: 1.0
 data:
-  dataset: "mnist"          # "mnist" or "cifar10"
-  data_dir: "./data/raw"
-  iid: false               # false = non-IID (realistic), true = IID
-  dirichlet_alpha: 0.5  # Lower = more skewed non-IID (0.1 = extreme)
-
+  dataset: mnist
+  data_dir: ./data/raw
+  iid: false
+  dirichlet_alpha: 0.5
 model:
-  architecture: "SimpleCNN"
-  input_channels: 1      # 1 for MNIST, 3 for CIFAR-10
+  architecture: SimpleCNN
+  input_channels: 1
   num_classes: 10
-
 training:
-  local_epochs: 2         # Local SGD epochs per client per round
+  local_epochs: 2
   batch_size: 32
   learning_rate: 0.01
-  device: "auto"           # "auto" detects GPU if available, else CPU
-
+  device: auto
 attack:
-  enabled: false           # No attack in baseline experiment
+  enabled: false
   type: null
   malicious_fraction: 0.0
   target_class: null
-
 defense:
-  aggregation: "fedavg"    # "fedavg", "krum", "trimmed_mean", "median"
-  krum_num_to_select: 7  # For Krum: how many updates to aggregate
-  trim_fraction: 0.1     # For TrimmedMean: fraction to trim from each end
-
+  aggregation: fedavg
+  krum_num_to_select: 7
+  trim_fraction: 0.1
 detection:
   enabled: false
-  method: null            # "norm_threshold", "cosine_sim", "pca"
-  threshold_sigma: 2.0   # For norm thresholding: µ + sigma * std
+  method: null
+  threshold_sigma: 2.0
+logging:
+  results_dir: experiments/results
+  figures_dir: report/figures
+  log_dir: experiments/logs
