@@ -17,6 +17,8 @@ from torchvision import datasets, transforms
 from src.fl_core.server import run_simulation
 from src.attacks.label_flip import LabelFlipAttack
 from src.attacks.backdoor import BackdoorAttack, compute_asr
+from src.attacks.gradient_scale import GradientScaleAttack
+from src.attacks.model_replacement import ModelReplacementAttack
 from src.fl_core.model import get_model
 
 # ── Dataset setup ──────────────────────────────────────────────────────────
@@ -60,6 +62,7 @@ attack_configs = [
 all_results   = []
 all_histories = {}   # { exp_name: [{"round": r, "accuracy": a}, ...] }
 
+# 1. Run Label-Flip and Backdoor Attacks
 for config in attack_configs:
     for frac in MALICIOUS_FRACTIONS:
         exp_name     = f"{config['type']}_f{int(frac*100)}"
@@ -116,6 +119,87 @@ for config in attack_configs:
         all_results.append(summary)
         print(f"\n  ✓ Result: Acc={final_acc*100:.2f}% | Drop={acc_drop:.2f}%")
 
+# 2. Run Gradient Scaling Experiments
+lambda_values = [2, 5, 10]
+gs_mal_fraction  = 0.2   # 2 out of 10 clients are malicious
+
+for lam in lambda_values:
+    exp_name = f"grad_scale_lam{lam}"
+    results_path = f"experiments/results/{exp_name}.csv"
+    
+    print(f"\n{'─'*55}")
+    print(f"  Experiment: Gradient Scale (λ={lam}) | 20% malicious")
+    print(f"{'─'*55}")
+    
+    attack = GradientScaleAttack(scale_factor=lam)
+    
+    t_start = time.time()
+    results = run_simulation(
+        train_dataset      = train_ds,
+        test_dataset       = test_ds,
+        num_clients        = NUM_CLIENTS,
+        num_rounds         = NUM_ROUNDS,
+        malicious_fraction = gs_mal_fraction,
+        attack_fn          = attack,
+        dataset_name       = "mnist",
+        results_path       = results_path,
+        seed               = 42,
+    )
+    elapsed = time.time() - t_start
+    final_acc = results[-1]["accuracy"]
+    acc_drop  = (BASELINE_ACC - final_acc) * 100
+    
+    all_histories[exp_name] = results
+    all_results.append({
+        "attack"            : f"Gradient Scale (λ={lam})",
+        "malicious_fraction": f"{gs_mal_fraction:.0%}",
+        "final_accuracy_%"  : f"{final_acc*100:.2f}",
+        "accuracy_drop_%"   : f"{acc_drop:.2f}",
+        "asr"               : "N/A",
+        "rounds"            : NUM_ROUNDS,
+        "elapsed_min"       : f"{elapsed/60:.1f}",
+    })
+    print(f"  ✓ Result: Acc={final_acc*100:.2f}% | Drop={acc_drop:.2f}%")
+
+# 3. Run Model Replacement Experiment
+mr_frac = 0.1
+exp_name = "model_replacement"
+results_path = f"experiments/results/{exp_name}.csv"
+
+print(f"\n{'─'*55}")
+print(f"  Experiment: Model Replacement | 10% malicious")
+print(f"{'─'*55}")
+
+mr_attack = ModelReplacementAttack(malicious_fraction=mr_frac)
+
+t_start = time.time()
+mr_results = run_simulation(
+    train_dataset      = train_ds,
+    test_dataset       = test_ds,
+    num_clients        = NUM_CLIENTS,
+    num_rounds         = NUM_ROUNDS,
+    malicious_fraction = mr_frac,
+    attack_fn          = mr_attack,
+    dataset_name       = "mnist",
+    results_path       = results_path,
+    seed               = 42,
+)
+elapsed = time.time() - t_start
+final_acc = mr_results[-1]["accuracy"]
+acc_drop  = (BASELINE_ACC - final_acc) * 100
+
+all_histories[exp_name] = mr_results
+all_results.append({
+    "attack"            : "Model Replacement",
+    "malicious_fraction": f"{mr_frac:.0%}",
+    "final_accuracy_%"  : f"{final_acc*100:.2f}",
+    "accuracy_drop_%"   : f"{acc_drop:.2f}",
+    "asr"               : "N/A",
+    "rounds"            : NUM_ROUNDS,
+    "elapsed_min"       : f"{elapsed/60:.1f}",
+})
+print(f"  ✓ Result: Acc={final_acc*100:.2f}% | Drop={acc_drop:.2f}%")
+
 # ── Save summary CSV ───────────────────────────────────────────────────────
 os.makedirs("experiments/results", exist_ok=True)
 summary_path = "experiments/results/attacks_summary.csv"
@@ -123,23 +207,26 @@ with open(summary_path, "w", newline="") as f:
     writer = csv.DictWriter(f, fieldnames=all_results[0].keys())
     writer.writeheader()
     writer.writerows(all_results)
-print(f"  ✓ Summary saved → {summary_path}")
+print(f"\n  ✓ Summary saved → {summary_path}")
 
-# ── Generate PNG plot ──────────────────────────────────────────────────────
+# ── Generate PNG plot (Updated for 4 experiments) ──────────────────────────
 COLORS = ["#e41a1c", "#ff7f00", "#984ea3",   # label_flip: red, orange, purple
-          "#377eb8", "#4daf4a", "#a65628"]    # backdoor  : blue, green, brown
+          "#377eb8", "#4daf4a", "#a65628"]   # backdoor  : blue, green, brown
 
-fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
-fig.suptitle("FL Attack Experiments — MNIST", fontsize=14, fontweight="bold")
+fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey=True)
+axes = axes.flatten()
+fig.suptitle("FL Attack Experiments — MNIST", fontsize=16, fontweight="bold")
+
+# Plot baselines on all axes
+for ax in axes:
+    ax.axhline(BASELINE_ACC * 100, color="black", linestyle="--",
+               linewidth=1.4, label=f"Baseline ({BASELINE_ACC*100:.1f}%)")
 
 attack_types = [("label_flip", "Label-Flip (3→8)"),
                 ("backdoor",   "Backdoor (trigger→0)")]
 
-for ax, (atype, atitle) in zip(axes, attack_types):
-    # Baseline reference line
-    ax.axhline(BASELINE_ACC * 100, color="black", linestyle="--",
-               linewidth=1.4, label=f"Baseline ({BASELINE_ACC*100:.1f}%)")
-
+# Plot Label-Flip and Backdoor
+for idx, (atype, atitle) in enumerate(attack_types):
     for i, frac in enumerate(MALICIOUS_FRACTIONS):
         exp_name = f"{atype}_f{int(frac*100)}"
         history  = all_histories.get(exp_name, [])
@@ -148,10 +235,30 @@ for ax, (atype, atitle) in zip(axes, attack_types):
         rounds = [r["round"] for r in history]
         accs   = [r["accuracy"] * 100 for r in history]
         color  = COLORS[i] if atype == "label_flip" else COLORS[i + 3]
-        ax.plot(rounds, accs, marker="o", markersize=3,
-                linewidth=1.8, color=color, label=f"{frac:.0%} malicious")
+        axes[idx].plot(rounds, accs, marker="o", markersize=3,
+                       linewidth=1.8, color=color, label=f"{frac:.0%} malicious")
+    axes[idx].set_title(atitle, fontsize=12)
 
-    ax.set_title(atitle, fontsize=12)
+# Plot Gradient Scale
+for i, lam in enumerate(lambda_values):
+    exp_name = f"grad_scale_lam{lam}"
+    history = all_histories.get(exp_name, [])
+    if history:
+        rounds = [r["round"] for r in history]
+        accs   = [r["accuracy"] * 100 for r in history]
+        axes[2].plot(rounds, accs, marker="o", markersize=3, linewidth=1.8, color=COLORS[i], label=f"λ={lam} (20% mal)")
+axes[2].set_title("Gradient Scaling", fontsize=12)
+
+# Plot Model Replacement
+history = all_histories.get("model_replacement", [])
+if history:
+    rounds = [r["round"] for r in history]
+    accs   = [r["accuracy"] * 100 for r in history]
+    axes[3].plot(rounds, accs, marker="o", markersize=3, linewidth=1.8, color=COLORS[0], label="10% malicious")
+axes[3].set_title("Model Replacement", fontsize=12)
+
+# Format all axes
+for ax in axes:
     ax.set_xlabel("Round", fontsize=10)
     ax.set_ylabel("Test Accuracy (%)", fontsize=10)
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f"))
@@ -160,7 +267,7 @@ for ax, (atype, atitle) in zip(axes, attack_types):
     ax.legend(fontsize=9)
     ax.grid(True, linestyle="--", alpha=0.4)
 
-plt.tight_layout()
+plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust to fit main title
 os.makedirs("report/figures", exist_ok=True)
 plot_path = "report/figures/fig2_attack_accuracy.png"
 plt.savefig(plot_path, dpi=150, bbox_inches="tight")
@@ -168,11 +275,11 @@ plt.close()
 print(f"  ✓ Plot saved    → {plot_path}")
 
 # ── Print table ───────────────────────────────────────────────────────────
-print(f"\n{'='*70}")
+print(f"\n{'='*80}")
 print("  ATTACK RESULTS SUMMARY")
-print(f"{'='*70}")
+print(f"{'='*80}")
 print(f"  {'Attack':<30} {'Fraction':>10} {'Final Acc':>10} {'Drop':>8} {'ASR':>8}")
-print(f"  {'─'*65}")
+print(f"  {'─'*75}")
 for r in all_results:
     print(f"  {r['attack']:<30} {r['malicious_fraction']:>10} "
           f"{r['final_accuracy_%']:>9}% {r['accuracy_drop_%']:>7}% {r['asr']:>7}")

@@ -17,6 +17,10 @@ from torch.utils.data import DataLoader
 from src.fl_core.model import SimpleCNN, get_model
 from src.fl_core.client import FLClient
 from src.utils.data_partition import dirichlet_partition
+from src.attacks.gradient_scale import GradientScaleAttack
+from src.attacks.model_replacement import ModelReplacementAttack
+
+
 # ══════════════════════════════════════════════════════════
 # Metric aggregation helpers (required by Flower)
 # ══════════════════════════════════════════════════════════
@@ -38,7 +42,6 @@ def make_evaluate_fn(model: SimpleCNN, test_loader: DataLoader, device: str = "c
     criterion = torch.nn.CrossEntropyLoss()
 
     def evaluate(server_round: int, parameters: fl.common.NDArrays, config: Dict):
-        # Load aggregated weights into evaluation model
         params_dict = zip(model.state_dict().keys(), parameters)
         state_dict  = {k: torch.tensor(v) for k, v in params_dict}
         model.load_state_dict(state_dict, strict=True)
@@ -63,32 +66,20 @@ def make_evaluate_fn(model: SimpleCNN, test_loader: DataLoader, device: str = "c
 def run_simulation(
     train_dataset,
     test_dataset,
-    num_clients:       int   = 10,
-    num_rounds:        int   = 20,
-    fraction_fit:      float = 1.0,
-    local_epochs:      int   = 2,
-    batch_size:        int   = 32,
-    lr:                float = 0.01,
-    alpha:             float = 0.5,
+    num_clients:        int   = 10,
+    num_rounds:         int   = 20,
+    fraction_fit:       float = 1.0,
+    local_epochs:       int   = 2,
+    batch_size:         int   = 32,
+    lr:                 float = 0.01,
+    alpha:              float = 0.5,
     malicious_fraction: float = 0.0,
-    attack_fn:         Optional[Callable] = None,
-    dataset_name:      str   = "mnist",
-    results_path:      str   = "experiments/results/baseline_mnist.csv",
-    seed:              int   = 42,
+    attack_fn:          Optional[Callable] = None,
+    dataset_name:       str   = "mnist",
+    results_path:       str   = "experiments/results/baseline_mnist.csv",
+    seed:               int   = 42,
 ) -> List[Dict]:
-    """
-    Run a complete FL simulation.
 
-    Args:
-        train_dataset      : Full torchvision training dataset.
-        test_dataset       : Full torchvision test dataset.
-        malicious_fraction : Fraction of clients that are malicious (0.0 = clean run).
-        attack_fn          : Function applied to malicious client data.
-        results_path       : CSV file path for logging per-round results.
-
-    Returns:
-        List of per-round result dicts: {round, accuracy, loss}
-    """
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -99,30 +90,34 @@ def run_simulation(
     print(f"  Malicious fraction: {malicious_fraction:.0%} | Attack: {attack_fn.__class__.__name__ if attack_fn else 'None'}")
     print(f"{'='*55}\n")
 
-    # ── Partition data (non-IID Dirichlet) ──────────────
+    # ── Partition data ───────────────────────────────────
     client_subsets = dirichlet_partition(
         train_dataset, num_clients=num_clients, alpha=alpha, seed=seed
     )
 
-    # ── Determine which clients are malicious ───────────
+    # ── Determine malicious clients ──────────────────────
     num_malicious = int(num_clients * malicious_fraction)
-    malicious_ids = set(range(num_malicious))  # first M clients are malicious
+    malicious_ids = set(range(num_malicious))
 
-    # ── Build test DataLoader for server evaluation ─────
+    # ── Test loader for server evaluation ───────────────
     test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False, num_workers=0)
+    eval_model  = get_model(dataset_name)
 
-    # ── Global model for server-side evaluation ─────────
-    eval_model = get_model(dataset_name)
-
-    # ── Results storage ──────────────────────────────────
     round_results = []
     os.makedirs(os.path.dirname(results_path), exist_ok=True)
 
-    # ── Flower client_fn factory ─────────────────────────
+    # ── Client factory ───────────────────────────────────
     def client_fn(cid: str) -> FLClient:
-        client_id = int(cid)
+        client_id    = int(cid)
         is_malicious = client_id in malicious_ids
         client_model = get_model(dataset_name)
+
+        # Pull scale_factor from the attack object itself so it's
+        # always in sync — no risk of mismatch between server and client.
+        scale_factor = 1.0
+        if is_malicious and isinstance(attack_fn, GradientScaleAttack):
+            scale_factor = attack_fn.scale_factor
+
         return FLClient(
             client_id    = client_id,
             dataset      = train_dataset,
@@ -133,39 +128,40 @@ def run_simulation(
             lr           = lr,
             device       = device,
             attack_fn    = attack_fn if is_malicious else None,
+            scale_factor = scale_factor,
         )
 
-    # ── Evaluation callback (stores results) ─────────────
+    # ── Evaluation callback ──────────────────────────────
     evaluate_fn = make_evaluate_fn(eval_model, test_loader, device)
 
     def evaluate_with_log(server_round, parameters, config):
         loss, metrics = evaluate_fn(server_round, parameters, config)
-        acc = metrics["accuracy"]
+        acc    = metrics["accuracy"]
         result = {"round": server_round, "accuracy": acc, "loss": loss}
         round_results.append(result)
         print(f"  Round {server_round:2d} | Acc: {acc:.4f} ({acc*100:.2f}%) | Loss: {loss:.4f}")
         return loss, metrics
 
-    # ── Strategy: standard FedAvg ────────────────────────
+    # ── Strategy ─────────────────────────────────────────
     strategy = FedAvg(
-        fraction_fit        = fraction_fit,
-        fraction_evaluate   = 0.0,           # skip client-side eval (server handles it)
-        min_fit_clients     = num_clients,
-        min_available_clients = num_clients,
-        evaluate_fn         = evaluate_with_log,
+        fraction_fit               = fraction_fit,
+        fraction_evaluate          = 0.0,
+        min_fit_clients            = num_clients,
+        min_available_clients      = num_clients,
+        evaluate_fn                = evaluate_with_log,
         fit_metrics_aggregation_fn = weighted_average,
     )
 
-    # ── Launch simulation ─────────────────────────────────
+    # ── Launch ───────────────────────────────────────────
     fl.simulation.start_simulation(
-        client_fn   = client_fn,
-        num_clients = num_clients,
-        config      = fl.server.ServerConfig(num_rounds=num_rounds),
-        strategy    = strategy,
+        client_fn     = client_fn,
+        num_clients   = num_clients,
+        config        = fl.server.ServerConfig(num_rounds=num_rounds),
+        strategy      = strategy,
         ray_init_args = {"num_cpus": os.cpu_count(), "include_dashboard": False},
     )
 
-    # ── Save to CSV ───────────────────────────────────────
+    # ── Save CSV ─────────────────────────────────────────
     with open(results_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["round", "accuracy", "loss"])
         writer.writeheader()

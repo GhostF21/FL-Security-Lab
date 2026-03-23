@@ -9,7 +9,13 @@ from torch.utils.data import DataLoader, Subset
 from typing import Callable, Dict, List, Optional, Tuple
 
 import flwr as fl
+from flwr.common import parameters_to_ndarrays, ndarrays_to_parameters
 from src.fl_core.model import SimpleCNN
+from src.attacks.gradient_scale import GradientScaleAttack
+from src.attacks.model_replacement import ModelReplacementAttack
+
+# Attacks that operate on gradients AFTER training (not on data BEFORE training)
+MODEL_LEVEL_ATTACKS = (GradientScaleAttack, ModelReplacementAttack)
 
 
 class FLClient(fl.client.NumPyClient):
@@ -25,9 +31,13 @@ class FLClient(fl.client.NumPyClient):
         batch_size   : Local mini-batch size (default: 32).
         lr           : SGD learning rate (default: 0.01).
         device       : 'cpu' or 'cuda'.
-        attack_fn    : Optional callable that modifies the dataset before training.
-                       Signature: attack_fn(dataset, indices) → modified_dataset, new_indices
-                       Pass None for honest clients.
+        attack_fn    : Optional attack object or callable.
+                       - None                   → honest client
+                       - callable               → data-level attack (label-flip, backdoor)
+                       - GradientScaleAttack    → model-level attack (post-training)
+                       - ModelReplacementAttack → model-level attack (post-training)
+        scale_factor : Lambda for GradientScaleAttack. Pulled from attack_fn automatically
+                       in server.py — do not set manually.
     """
 
     def __init__(
@@ -41,6 +51,7 @@ class FLClient(fl.client.NumPyClient):
         lr: float = 0.01,
         device: str = "cpu",
         attack_fn: Optional[Callable] = None,
+        scale_factor: float = 1.0,
     ):
         self.client_id    = client_id
         self.dataset      = dataset
@@ -51,6 +62,7 @@ class FLClient(fl.client.NumPyClient):
         self.lr           = lr
         self.device       = device
         self.attack_fn    = attack_fn
+        self.scale_factor = scale_factor
         self.criterion    = nn.CrossEntropyLoss()
 
     # ── Parameter I/O ─────────────────────────────────────
@@ -61,7 +73,7 @@ class FLClient(fl.client.NumPyClient):
     def set_parameters(self, parameters: List[np.ndarray]) -> None:
         """Load server-provided weights into local model."""
         params_dict = zip(self.model.state_dict().keys(), parameters)
-        state_dict = {k: torch.tensor(v) for k, v in params_dict}
+        state_dict  = {k: torch.tensor(v) for k, v in params_dict}
         self.model.load_state_dict(state_dict, strict=True)
 
     # ── Local Training ─────────────────────────────────────
@@ -70,14 +82,16 @@ class FLClient(fl.client.NumPyClient):
     ) -> Tuple[List[np.ndarray], int, Dict]:
         """
         1. Load global model weights.
-        2. Optionally apply attack to local data.
+        2. Apply data-level attack if applicable (label-flip, backdoor).
         3. Run local_epochs of SGD.
-        4. Return updated weights + dataset size + metrics.
+        4. Apply model-level attack if applicable (gradient scaling, model replacement).
+        5. Return updated weights + dataset size + metrics.
         """
         self.set_parameters(parameters)
 
-        # Apply attack to local data if this is a malicious client
-        if self.attack_fn is not None:
+        # ── Data-level attack (label-flip, backdoor) ──────────
+        # Model-level attacks skip this — they don't touch the data.
+        if self.attack_fn is not None and not isinstance(self.attack_fn, MODEL_LEVEL_ATTACKS):
             dataset, indices = self.attack_fn(self.dataset, self.indices)
         else:
             dataset, indices = self.dataset, self.indices
@@ -104,6 +118,21 @@ class FLClient(fl.client.NumPyClient):
                 total_loss += loss.item()
 
         avg_loss = total_loss / (self.local_epochs * len(train_loader))
+
+        # ── Gradient Scaling Attack (model-level) ──────────────
+        # Scales the gradient delta by scale_factor to dominate FedAvg.
+        if isinstance(self.attack_fn, GradientScaleAttack):
+            poisoned = self.attack_fn.apply(parameters, self.get_parameters(config={}))
+            return poisoned, len(indices), {"loss": avg_loss}
+
+        # ── Model Replacement Attack (model-level) ─────────────
+        # Crafts an update that pushes the global model toward a target.
+        # The locally trained model IS the target — apply boost formula.
+        if isinstance(self.attack_fn, ModelReplacementAttack):
+            poisoned = self.attack_fn.apply(parameters, self.get_parameters(config={}))
+            return poisoned, len(indices), {"loss": avg_loss}
+
+        # ── Honest return (or data-level attack return) ────────
         return self.get_parameters(config={}), len(indices), {"loss": avg_loss}
 
     # ── Local Evaluation ──────────────────────────────────
