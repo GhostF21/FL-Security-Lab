@@ -1,11 +1,11 @@
 attack,malicious_fraction,final_accuracy_%,accuracy_drop_%,asr,rounds,elapsed_min
-Label-Flip (3→8),10%,99.05,0.10,N/A,20,11.6
-Label-Flip (3→8),20%,98.81,0.34,N/A,20,11.7
-Label-Flip (3→8),30%,97.98,1.17,N/A,20,11.9
-Backdoor (trigger→0),10%,97.45,1.70,11.04,20,12.0
-Backdoor (trigger→0),20%,98.46,0.69,11.04,20,13.6
-Backdoor (trigger→0),30%,98.37,0.78,11.04,20,12.0
-Gradient Scale (λ=2),20%,99.12,0.03,N/A,20,11.5
-Gradient Scale (λ=5),20%,98.98,0.17,N/A,20,11.3
-Gradient Scale (λ=10),20%,78.66,20.49,N/A,20,11.6
-Model Replacement,10%,99.11,0.04,N/A,20,12.4
+Label-Flip (3→8),10%,99.12,0.03,N/A,20,13.4
+Label-Flip (3→8),20%,98.51,0.64,N/A,20,13.0
+Label-Flip (3→8),30%,96.36,2.79,N/A,20,543.1
+Backdoor (trigger→0),10%,97.97,1.18,11.04,20,85.8
+Backdoor (trigger→0),20%,98.42,0.73,11.04,20,24.1
+Backdoor (trigger→0),30%,98.26,0.89,11.04,20,22.5
+Gradient Scale (λ=2),20%,99.17,-0.02,N/A,20,20.1
+Gradient Scale (λ=5),20%,98.61,0.54,N/A,20,21.3
+Gradient Scale (λ=10),20%,86.30,12.85,N/A,20,19.9
+Model Replacement,10%,98.99,0.16,N/A,20,21.6

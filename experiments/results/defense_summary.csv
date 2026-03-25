@@ -1,0 +1,7 @@
+attack,mal_fraction,f_assumed,fedavg_acc_%,krum_acc_%,recovery_pct
+label_flip,0.1,1,99.07,99.16,112.5
+label_flip,0.2,2,99.02,99.07,38.5
+label_flip,0.3,3,98.85,88.92,-3310.0
+grad_scale_10,0.1,1,99.0,99.06,40.0
+grad_scale_10,0.2,2,80.63,98.98,99.1
+grad_scale_10,0.3,3,9.82,98.89,99.7
