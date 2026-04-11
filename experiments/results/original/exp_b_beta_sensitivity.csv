@@ -1,0 +1,5 @@
+beta,label,final_acc,vs_correct
+1,beta=1 (UNDER — miss malicious),99.01,-0.13
+2,beta=2 (CORRECT),99.14,0.0
+3,beta=3 (OVER — lose honest data),99.16,0.02
+4,beta=4 (OVER — lose honest data),99.08,-0.06

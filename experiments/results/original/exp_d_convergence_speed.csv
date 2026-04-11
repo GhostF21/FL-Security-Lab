@@ -1,0 +1,8 @@
+Scenario,Rounds to 90%,Final Acc%
+Clean FedAvg,1,99.15
+FedAvg + GradScale (none),13,82.67
+Krum vs GradScale,2,99.05
+TrimMean vs GradScale,1,99.18
+FedAvg + LabelFlip (none),1,98.89
+Krum vs LabelFlip,1,99.03
+TrimMean vs LabelFlip,1,99.07

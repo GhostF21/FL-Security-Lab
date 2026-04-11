@@ -1,0 +1,5 @@
+Defense,Tuned For,Tested Against,Type,Final Acc%
+Krum (f=2),Grad Scale,Grad Scale,Natural match,99.05
+Krum (f=2),Grad Scale,Label-Flip,Cross-test,99.03
+TrimMean (b=2),Label-Flip,Label-Flip,Natural match,99.07
+TrimMean (b=2),Label-Flip,Grad Scale,Cross-test,99.18
