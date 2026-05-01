@@ -1,0 +1,19 @@
+scenario,attack,mal_frac,detector,precision,recall,f1,fpr
+GS_f10,grad_scale,0.1,NormThreshold(k=2.0),1.0,1.0,1.0,0.0
+GS_f10,grad_scale,0.1,CosineSimilarity(thr=0.5),0.0,0.0,0.0,1.0
+GS_f10,grad_scale,0.1,"PCAOutlier(k=2, pct=90.0)",1.0,1.0,1.0,0.0
+GS_f20,grad_scale,0.2,NormThreshold(k=2.0),1.0,0.5,0.6667,0.0
+GS_f20,grad_scale,0.2,CosineSimilarity(thr=0.5),0.0,0.0,0.0,1.0
+GS_f20,grad_scale,0.2,"PCAOutlier(k=2, pct=90.0)",1.0,0.5,0.6667,0.0
+GS_f30,grad_scale,0.3,NormThreshold(k=2.0),0.0,0.0,0.0,0.0
+GS_f30,grad_scale,0.3,CosineSimilarity(thr=0.5),0.0071,0.0167,0.01,1.0
+GS_f30,grad_scale,0.3,"PCAOutlier(k=2, pct=90.0)",1.0,0.3333,0.5,0.0
+LF_f10,label_flip,0.1,NormThreshold(k=2.0),1.0,0.75,0.8571,0.0
+LF_f10,label_flip,0.1,CosineSimilarity(thr=0.5),0.1,1.0,0.1818,1.0
+LF_f10,label_flip,0.1,"PCAOutlier(k=2, pct=90.0)",0.95,0.95,0.95,0.0056
+LF_f20,label_flip,0.2,NormThreshold(k=2.0),1.0,0.275,0.4314,0.0
+LF_f20,label_flip,0.2,CosineSimilarity(thr=0.5),0.2,1.0,0.3333,1.0
+LF_f20,label_flip,0.2,"PCAOutlier(k=2, pct=90.0)",0.95,0.475,0.6333,0.0062
+LF_f30,label_flip,0.3,NormThreshold(k=2.0),1.0,0.0833,0.1538,0.0
+LF_f30,label_flip,0.3,CosineSimilarity(thr=0.5),0.3,1.0,0.4615,1.0
+LF_f30,label_flip,0.3,"PCAOutlier(k=2, pct=90.0)",1.0,0.3333,0.5,0.0

@@ -3,9 +3,17 @@ FL Security Lab — FedAvg Server / Simulation Runner.
 Builds the Flower simulation, logs per-round accuracy & loss to CSV.
 
 Supported strategies:
-  - FedAvg        : plain weighted average (no defense)
-  - KrumStrategy  : Multi-Krum or Single-Krum (Blanchard et al., 2017)
-  - TrimMeanStrategy : Coordinate-wise Trimmed Mean (Yin et al., 2018)
+  - FedAvg             : plain weighted average (no defense)
+  - KrumStrategy       : Multi-Krum or Single-Krum (Blanchard et al., 2017)
+  - TrimMeanStrategy   : Coordinate-wise Trimmed Mean (Yin et al., 2018)
+
+BW4 additions:
+  - KrumStrategy and TrimMeanStrategy now collect per-client gradient L2
+    norms during every aggregate_fit() call via _collect_norms().
+  - run_simulation() automatically exports norm logs to a *_norms.csv
+    file alongside the accuracy CSV after each run.
+  - malicious_ids is passed into the strategy so norm logs are labelled
+    correctly (is_malicious column) for detector evaluation.
 """
 import csv
 import os
@@ -13,6 +21,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import pandas as pd
 import torch
 import flwr as fl
 from flwr.common import Metrics, parameters_to_ndarrays, ndarrays_to_parameters
@@ -39,6 +48,41 @@ def weighted_average(metrics: List[Tuple[int, Metrics]]) -> Metrics:
 
 
 # ══════════════════════════════════════════════════════════
+# BW4 — Internal norm collection helper
+# ══════════════════════════════════════════════════════════
+def _collect_norms(strategy_obj, server_round: int, results, malicious_ids: set):
+    """
+    Compute and store gradient L2 norms for every client in this round.
+
+    Called at the top of both KrumStrategy.aggregate_fit() and
+    TrimMeanStrategy.aggregate_fit(). Results are accumulated in
+    strategy_obj._norm_logs (list of dicts) and exported to CSV by
+    run_simulation() after start_simulation() returns.
+
+    Args:
+        strategy_obj  : The strategy instance (self inside aggregate_fit)
+        server_round  : Current Flower round number
+        results       : Raw Flower fit results list
+        malicious_ids : Set of client_id integers that are malicious
+    """
+    if not hasattr(strategy_obj, "_norm_logs"):
+        strategy_obj._norm_logs = []
+
+    for client_idx, (_, fit_res) in enumerate(results):
+        local_params = parameters_to_ndarrays(fit_res.parameters)
+        # Flatten all layers and compute the L2 norm of the full parameter vector.
+        # This approximates the gradient update norm when local_params ≈ w_global + Δw.
+        flat    = np.concatenate([p.flatten() for p in local_params])
+        l2_norm = float(np.linalg.norm(flat))
+        strategy_obj._norm_logs.append({
+            "round"        : server_round,
+            "client_id"    : client_idx,
+            "l2_norm"      : l2_norm,
+            "is_malicious" : client_idx in malicious_ids,
+        })
+
+
+# ══════════════════════════════════════════════════════════
 # Krum Strategy — replaces FedAvg aggregation with Krum
 # ══════════════════════════════════════════════════════════
 class KrumStrategy(FedAvg):
@@ -53,14 +97,21 @@ class KrumStrategy(FedAvg):
             **kwargs      : All standard FedAvg arguments (fraction_fit, evaluate_fn, etc.)
         """
         super().__init__(**kwargs)
-        self.f              = f
-        self.use_multi_krum = use_multi_krum
-        self.m              = m
+        self.f               = f
+        self.use_multi_krum  = use_multi_krum
+        self.m               = m
+        # BW4: norm log storage — populated by _collect_norms() each round
+        self._norm_logs      = []
+        # BW4: malicious_ids injected by run_simulation() before first round
+        self._malicious_ids: set = set()
 
     def aggregate_fit(self, server_round, results, failures):
         """Override FedAvg aggregation with Krum."""
         if not results:
             return None, {}
+
+        # BW4 — collect gradient L2 norms before aggregating
+        _collect_norms(self, server_round, results, self._malicious_ids)
 
         # Unpack client updates into list of parameter arrays
         all_updates = []
@@ -123,8 +174,12 @@ class TrimMeanStrategy(FedAvg):
             **kwargs           : All standard FedAvg arguments.
         """
         super().__init__(**kwargs)
-        self.malicious_fraction = malicious_fraction
-        self.num_clients        = num_clients
+        self.malicious_fraction  = malicious_fraction
+        self.num_clients         = num_clients
+        # BW4: norm log storage — populated by _collect_norms() each round
+        self._norm_logs          = []
+        # BW4: malicious_ids injected by run_simulation() before first round
+        self._malicious_ids: set = set()
 
         # Resolve beta at construction time if possible
         # (if beta=None and fraction=0 we will just set beta=0)
@@ -149,6 +204,9 @@ class TrimMeanStrategy(FedAvg):
         """Override FedAvg aggregation with coordinate-wise Trimmed Mean."""
         if not results:
             return None, {}
+
+        # BW4 — collect gradient L2 norms before aggregating
+        _collect_norms(self, server_round, results, self._malicious_ids)
 
         # Unpack client updates
         all_updates = []
@@ -258,6 +316,12 @@ def run_simulation(
     Returns:
         List of per-round result dicts: {round, accuracy, loss}
 
+    BW4 side-effect:
+        If strategy is KrumStrategy or TrimMeanStrategy, a second CSV is
+        saved automatically at results_path.replace(".csv", "_norms.csv")
+        containing per-round, per-client gradient L2 norms with is_malicious
+        labels — ready for anomaly detector evaluation.
+
     Examples:
         # Clean baseline
         run_simulation(train_ds, test_ds)
@@ -304,6 +368,10 @@ def run_simulation(
     # ── Determine which clients are malicious ───────────
     num_malicious = int(num_clients * malicious_fraction)
     malicious_ids = set(range(num_malicious))
+
+    # BW4 — inject malicious_ids into strategy so norm logs are labelled correctly
+    if strategy is not None and hasattr(strategy, "_malicious_ids"):
+        strategy._malicious_ids = malicious_ids
 
     # ── Build test DataLoader for server evaluation ─────
     test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False, num_workers=0)
@@ -381,12 +449,28 @@ def run_simulation(
         ray_init_args = {"num_cpus": os.cpu_count(), "include_dashboard": False},
     )
 
-    # ── Save to CSV ───────────────────────────────────────
+    # ── Save accuracy CSV ─────────────────────────────────
     with open(results_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["round", "accuracy", "loss"])
         writer.writeheader()
         writer.writerows(round_results)
     print(f"\n  ✓ Results saved → {results_path}")
     print(f"  Final accuracy: {round_results[-1]['accuracy']*100:.2f}%\n")
+
+    # ── BW4: Export gradient norm logs ───────────────────
+    # If the active strategy collected norm logs (KrumStrategy or
+    # TrimMeanStrategy), save them as a companion CSV for anomaly detection.
+    if hasattr(active_strategy, "_norm_logs") and active_strategy._norm_logs:
+        norm_path = results_path.replace(".csv", "_norms.csv")
+        norm_df   = pd.DataFrame(active_strategy._norm_logs)
+        norm_df.to_csv(norm_path, index=False)
+        print(f"  ✓ Norm logs saved  → {norm_path}")
+        print(f"    Rounds collected : {norm_df['round'].nunique()}")
+        print(f"    Clients per round: {norm_df.groupby('round')['client_id'].nunique().mean():.0f}")
+        if norm_df["is_malicious"].any():
+            mal_mean = norm_df[norm_df["is_malicious"]]["l2_norm"].mean()
+            hon_mean = norm_df[~norm_df["is_malicious"]]["l2_norm"].mean()
+            print(f"    Honest norm µ    : {hon_mean:.4f}")
+            print(f"    Malicious norm µ : {mal_mean:.4f}  ({mal_mean/hon_mean:.1f}× ratio)")
 
     return round_results

@@ -1,0 +1,5 @@
+variant,final_acc_%
+No Defense (FedAvg),93.56
+Aggregation Only (TrimMean),99.22
+Krum + TrimMean (Combined),99.16
+Clean FedAvg (Baseline),99.1
