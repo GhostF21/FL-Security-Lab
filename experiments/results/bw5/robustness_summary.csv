@@ -1,0 +1,11 @@
+test,param,f1,precision,recall,fpr
+high_fraction,frac=10%,1.0,1.0,1.0,0.0
+high_fraction,frac=20%,0.6667,1.0,0.5,0.0
+high_fraction,frac=30%,0.0,0.0,0.0,0.0
+high_fraction,frac=40%,0.0,0.0,0.0,0.0
+high_fraction,frac=50%,0.0,0.0,0.0,0.0
+adaptive_attacker,evasion=0%,0.6667,1.0,0.5,0.0
+adaptive_attacker,evasion=25%,0.6333,0.95,0.475,0.0062
+adaptive_attacker,evasion=50%,0.4912,0.8235,0.35,0.0187
+adaptive_attacker,evasion=75%,0.3137,0.7273,0.2,0.0187
+adaptive_attacker,evasion=100%,0.0455,0.25,0.025,0.0187
